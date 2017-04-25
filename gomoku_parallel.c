@@ -8,10 +8,25 @@
 #define MAX(a,b) ((a) > (b) ? a : b)
 #define MIN(a,b) ((a) < (b) ? a : b)
 #define DEPTH 4
+
+
+#define COUNT_POS DIM*DIM
+#define MOV_POS COUNT_POS+1
+#define A_POS COUNT_POS+2
+#define B_POS COUNT_POS+3
+#define PLAY_POS COUNT_POS+4
+#define MOV_BUF_LEN DIM*DIM + 5
+#define DATA_BUF_LEN 3
+#define MASTER 0
+
+#define TERM_MSG 1
+#define WORK_MSG 2
+#define SCORE_MSG 3
+#define WORK_REQ 4
 // 1 - black
 // 2 -white
 typedef struct{
-	char **board;
+	char board[DIM][DIM];
 	int count;
 } State;
 
@@ -39,14 +54,194 @@ int min_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov
 
 
 int main(int argc, char **argv){
-	play();
-	
-//	State s;
-//	create_board(&s);
-//	short * moves;
-//	generate_moves(&s,moves);
 
-//	print_board(&s);
+	MPI_Status status;
+	MPI_Init(NULL,NULL);
+	
+	int world_rank;
+
+	MPI_Comm_rank(MPI_COMM_WORLD,&world_rank);
+	
+	int world_size;
+
+	MPI_Comm_size(MPI_COMM_WORLD,&world_size);
+
+
+	int i, j,x,y;
+	State s;
+	char player = 1;
+	char aiplayer = 2;
+	char curplayer = 2;
+	char otherplayer = 1;
+	short mov;
+	int score;
+	int t_score;
+	short t_move;
+	int k,m;
+	int proc;
+	int len;
+	int a;
+	int b;
+	int sc_counter;
+	int send_counter;
+	int found_score;
+	int count;
+
+
+	double start_time, end_time;
+	struct timeval tz;
+	struct timezone tx;
+
+	// count + a + b + x + y + player
+	short * move_buffer = (short*)malloc(MOV_BUF_LEN*sizeof(short));
+
+
+	// move, score
+	short * data_buffer = (short*)malloc(DATA_BUF_LEN*sizeof(short));
+	short *moves = (short*)malloc((DIM*DIM)*sizeof(short));
+
+
+	for( i = 0; i < MOV_BUF_LEN; i++){
+		move_buffer[i] = 0;
+	}
+
+
+	
+	for(i = 0; i < DIM; i++){
+		for(j = 0; j < DIM ; j++){
+			s.board[i][j] = 0;
+		}
+	}
+	s.count = 0;
+
+	if(world_rank == 0){
+
+
+
+		printf("Reached Here 6\n");
+		fflush(stdout);
+
+
+		while(1){
+			printf("\nEnter row and col : ");
+			fflush(stdout);
+			scanf("%d %d",&x,&y);
+			s.board[x][y] = player;
+			move_buffer[x*DIM+y] = player;
+			s.count++;
+			if(is_terminal(&s,x,y,player) == 1){
+				printf("\nHuman Won");
+			    // TODO SEND TERMINATE MESSAGE
+				break;
+			}
+
+			printf("\nMaster1");
+			fflush(stdout);
+			gettimeofday(&tz,&tx);
+			start_time  = (double)tz.tv_sec;
+			len = generate_moves2(&s,moves,x,y,player);
+			
+			a = SHRT_MIN;
+			b = SHRT_MAX;
+			sc_counter = 0 ;
+			send_counter = 0;
+			found_score = 0;
+			score = INT_MIN;
+			
+			while(send_counter < len || (found_score == 0 &&  sc_counter < len)){
+				// TODO get a score 
+				// Get move
+				// t_score = temp score
+				// t_move = temp move
+				// sc_counter incerement
+				// send a and b too
+			
+				MPI_Recv(data_buffer,DATA_BUF_LEN,MPI_SHORT,MPI_ANY_SOURCE,MPI_ANY_TAG,MPI_COMM_WORLD,&status);
+				
+				if(status.MPI_TAG == SCORE_MSG){
+					sc_counter++;
+					t_score = data_buffer[0];
+					t_move = data_buffer[1];
+					//printf("\nReceived score : %d move : %d",t_score, t_move);
+					if(t_score > score ){
+
+						score = t_score;
+						mov = t_move;
+					}
+					a = MAX(a,score);
+					if(a >= b){
+						found_score = 1;
+						break;
+					}
+				}
+				else if(status.MPI_TAG == WORK_REQ && send_counter < len ){
+					proc = status.MPI_SOURCE;					
+					move_buffer[COUNT_POS] = s.count;
+					move_buffer[MOV_POS] = moves[send_counter];
+					move_buffer[A_POS] = a;
+					move_buffer[B_POS] = b;
+					move_buffer[PLAY_POS] = player;
+					MPI_Send(move_buffer,MOV_BUF_LEN,MPI_SHORT,proc,WORK_MSG,MPI_COMM_WORLD);
+					send_counter++;
+				}
+			}
+			gettimeofday(&tz,&tx);
+			end_time = (double)tz.tv_sec;
+			printf("\nTime : %lf",end_time - start_time);
+				
+
+		// TODO remmeber to update move buffer	
+			s.board[mov/100][mov%100] = aiplayer;
+			s.count++;
+			move_buffer[((mov/100)*DIM) + mov%100] = aiplayer;
+			print_board(&s);
+		}
+		
+
+	}
+	else{
+		// Generate board, incemente count, add element, player
+		while(1){
+			MPI_Send(data_buffer,DATA_BUF_LEN,MPI_SHORT,MASTER,WORK_REQ,MPI_COMM_WORLD);
+			MPI_Recv(move_buffer,MOV_BUF_LEN,MPI_SHORT,MASTER,MPI_ANY_TAG,MPI_COMM_WORLD,&status);
+			
+			if(status.MPI_TAG == WORK_MSG){
+				a = move_buffer[A_POS];
+				b = move_buffer[B_POS];
+			    mov = move_buffer[MOV_POS];
+				curplayer = move_buffer[PLAY_POS];
+				count = move_buffer[COUNT_POS];
+				s.count = count;
+				i = 0;
+				for(k = 0; k < DIM ; k ++){
+					for(m = 0; m < DIM; m++)
+						s.board[k][m] = move_buffer[i++];
+				}
+		
+				otherplayer = 1;
+				if(curplayer == 1){
+					otherplayer = 2;
+				}
+				s.board[mov/100][mov%100] = otherplayer;
+				s.count++;
+				score = min_val(&s,DEPTH-1,a,b,mov/100,mov%100,otherplayer,&t_move);
+	//			printf("\nClinet Scoe : %d a: %d b : %d mov : %d",score,a,b,mov);
+				s.count--;
+				s.board[mov/100][mov%100] = 0;
+				data_buffer[1] = mov;
+				data_buffer[0] = score;
+				MPI_Send(data_buffer,DATA_BUF_LEN,MPI_SHORT,MASTER,SCORE_MSG,MPI_COMM_WORLD);
+		
+
+			}
+			else if(status.MPI_TAG == TERM_MSG){
+				break;
+			}
+		}
+
+	}
+	MPI_Finalize();
+	
 }
 int max_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov){
 
@@ -99,7 +294,7 @@ int min_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov
 		return evaluate2(s,2) - evaluate(s,1);
 	}
 	if(is_terminal(s,x,y,player) == 1){
-		return evaluate2(s,2);
+		return evaluate2(s,2) - evaluate(s,1);
 
 	}
 	int score = INT_MAX;
@@ -146,9 +341,6 @@ void play(){
 	char aiplayer = 2;
 	int score;
 	short mov;
-	double start_time, end_time;
-	struct timeval tz;
-	struct timezone tx;
 	while(1){
 		printf("Enter row and col");
 		scanf("%d %d",&i,&j);
@@ -158,13 +350,8 @@ void play(){
 			printf("\nHuman Won");
 			break;
 		}
-		gettimeofday(&tz,&tx);
-		start_time = (double)tz.tv_sec;
 		score = max_val(&s,DEPTH,INT_MIN,INT_MAX,i,j,player,&mov);
-	//	printf("\n Move : %d %d",mov/100,mov%100);
-		gettimeofday(&tz,&tx);
-		end_time = (double)tz.tv_sec;
-		printf("\nTime taken : %lf", end_time - start_time);
+		printf("\n Move : %d %d",mov/100,mov%100);
 		s.board[mov/100][mov%100] = aiplayer;
 		s.count++;
 		if(is_terminal(&s,mov/100,mov%100,aiplayer) == 1){
@@ -172,6 +359,7 @@ void play(){
 				break;
 		}
 		print_board(&s);
+		printf("Score : %d",score);
 	}
 
 }
@@ -426,7 +614,7 @@ int evaluate2(State *s, char player){
 				m++;
 			}
 
-			score += assign_score(player,p1_count,p2_count,free_count);
+			t_score += assign_score(player,p1_count,p2_count,free_count);
 
 
 
@@ -441,36 +629,29 @@ int assign_score(int player, int p1_count, int p2_count, int free_count){
 	if(player == 1){
 		if(p1_count == 5){
 			score += 2000;
-			return score;
-		}
-		if(p1_count == 4 && free_count == 1){
-			return 1000;
 		}
 		if(p1_count + free_count == 5){
-			score += p1_count*2 + free_count;
+			score += p1_count*20 + free_count*5;
 		}
 		if(p1_count  == 1 && p2_count == 4){
 			score += 1000;
 		}
-		if(p1_count == 2 && p2_count == 3){
-			score += 700;
+		if(p2_count > 3){
+			score += 500;
 		}
 	}
 	else{
 		if(p2_count == 5){
 			score += 2000;
 		}
-		if(p2_count == 4 && free_count == 1){
-			return 1000;
-		}
 		if(p2_count + free_count == 5){
-			score += p2_count*2 + free_count;
+			score += p2_count*20 + free_count*5;
 		}
 		if(p2_count == 1 && p1_count == 4){
 			score += 1000;
 		}
-		if(p1_count == 2 && p2_count == 3){
-			score += 700;
+		if(p1_count > 3){
+			score += 500;
 		}
 	}
 
@@ -891,11 +1072,13 @@ int evaluate(State *s , char player){
 }
 void create_board(State *s){
 
-	s->board = (char**)malloc(DIM*sizeof(char*));
+//	s->board = (char**)malloc(DIM*sizeof(char*));
+
+	
 	int i;
 	int j;
 	for(i = 0; i < DIM; i++){
-		s->board[i] = (char*)malloc(DIM*sizeof(char));
+	//	s->board[i] = (char*)malloc(DIM*sizeof(char));
 		for(j = 0; j < DIM ; j++){
 			s->board[i][j] = 0;
 		}
