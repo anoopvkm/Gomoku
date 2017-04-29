@@ -30,15 +30,22 @@ typedef struct{
 	int count;
 } State;
 
+// ccreates intital board
 void create_board(State *s);
 
+// genarates moves
 void generate_moves(State *s, short *moves );
 
+// generates limited moves
 int  generate_moves2(State *s, short *moves, int x, int y, int player );
 
+// formatted board printing
 void print_board(State *s);
+
+// assigns a score for a board position
 int assign_score(int player, int p1_count, int p2_count, int free_count);
 	
+// evalues a board position
 int evaluate(State *s, char player);
 int evaluate2(State *s, char player);
 
@@ -46,10 +53,13 @@ int evaluate2(State *s, char player);
 
 void play();
 
+// detects terminal condition
 int is_terminal(State *s,int x, int y, char player);
 
+// alpha beta pruning max value function
 int max_val(State *s,int depth, int a, int b,int x, int y, char player,short *mov);
 
+// alpha beta pruuning min value funciton
 int min_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov);
 
 
@@ -86,7 +96,7 @@ int main(int argc, char **argv){
 	int send_counter;
 	int found_score;
 	int count;
-
+	int temp;
 
 	double start_time, end_time;
 	struct timeval tz;
@@ -114,29 +124,36 @@ int main(int argc, char **argv){
 	}
 	s.count = 0;
 
+	// process 0 is master process
+	// rest of the proccesors are slaves
 	if(world_rank == 0){
 
 
 
-		printf("Reached Here 6\n");
-		fflush(stdout);
 
 
 		while(1){
-			printf("\nEnter row and col : ");
+			printf("\nHuman Player : Enter row and column : ");
 			fflush(stdout);
 			scanf("%d %d",&x,&y);
+			while(x>= DIM || y >= DIM || s.board[x][y] != 0){
+				printf("\nAlready Occupied :  Please reenter : ");
+				fflush(stdout);
+				scanf("%d %d",&x,&y);
+			
+			}
 			s.board[x][y] = player;
 			move_buffer[x*DIM+y] = player;
 			s.count++;
 			if(is_terminal(&s,x,y,player) == 1){
-				printf("\nHuman Won");
-			    // TODO SEND TERMINATE MESSAGE
+				printf("\nHuman Won !!!!!!\n");
+				for(i = 1; i < world_size; i++){
+					MPI_Send(move_buffer,MOV_BUF_LEN,MPI_SHORT,i,TERM_MSG,MPI_COMM_WORLD);
+			
+				}
 				break;
 			}
 
-			printf("\nMaster1");
-			fflush(stdout);
 			gettimeofday(&tz,&tx);
 			start_time  = (double)tz.tv_sec;
 			len = generate_moves2(&s,moves,x,y,player);
@@ -149,20 +166,21 @@ int main(int argc, char **argv){
 			score = INT_MIN;
 			
 			while(send_counter < len || (found_score == 0 &&  sc_counter < len)){
-				// TODO get a score 
 				// Get move
 				// t_score = temp score
 				// t_move = temp move
 				// sc_counter incerement
 				// send a and b too
-			
+	
+
+				// waits for a slave processor to send work request / score message
 				MPI_Recv(data_buffer,DATA_BUF_LEN,MPI_SHORT,MPI_ANY_SOURCE,MPI_ANY_TAG,MPI_COMM_WORLD,&status);
 				
+				// updatting bounds and moves on receivign a score message
 				if(status.MPI_TAG == SCORE_MSG){
 					sc_counter++;
 					t_score = data_buffer[0];
 					t_move = data_buffer[1];
-					//printf("\nReceived score : %d move : %d",t_score, t_move);
 					if(t_score > score ){
 
 						score = t_score;
@@ -174,6 +192,7 @@ int main(int argc, char **argv){
 						break;
 					}
 				}
+				// on receving work request, if work is left assigns it to the process.
 				else if(status.MPI_TAG == WORK_REQ && send_counter < len ){
 					proc = status.MPI_SOURCE;					
 					move_buffer[COUNT_POS] = s.count;
@@ -190,19 +209,32 @@ int main(int argc, char **argv){
 			printf("\nTime : %lf",end_time - start_time);
 				
 
-		// TODO remmeber to update move buffer	
 			s.board[mov/100][mov%100] = aiplayer;
 			s.count++;
 			move_buffer[((mov/100)*DIM) + mov%100] = aiplayer;
 			print_board(&s);
+	
+			if(is_terminal(&s,mov/100,mov%100,aiplayer) == 1){
+				printf("\nComputer Won !!!!!!\n");
+				for(i = 1; i < world_size ; i++){
+					MPI_Send(move_buffer,MOV_BUF_LEN,MPI_SHORT,i,TERM_MSG,MPI_COMM_WORLD);
+				}
+				break;
+			}
+
+
+			
 		}
 		
 
 	}
 	else{
+		// slave process
 		// Generate board, incemente count, add element, player
 		while(1){
+			// send work request
 			MPI_Send(data_buffer,DATA_BUF_LEN,MPI_SHORT,MASTER,WORK_REQ,MPI_COMM_WORLD);
+			// waiting for work or termination request
 			MPI_Recv(move_buffer,MOV_BUF_LEN,MPI_SHORT,MASTER,MPI_ANY_TAG,MPI_COMM_WORLD,&status);
 			
 			if(status.MPI_TAG == WORK_MSG){
@@ -225,7 +257,6 @@ int main(int argc, char **argv){
 				s.board[mov/100][mov%100] = otherplayer;
 				s.count++;
 				score = min_val(&s,DEPTH-1,a,b,mov/100,mov%100,otherplayer,&t_move);
-	//			printf("\nClinet Scoe : %d a: %d b : %d mov : %d",score,a,b,mov);
 				s.count--;
 				s.board[mov/100][mov%100] = 0;
 				data_buffer[1] = mov;
@@ -246,10 +277,10 @@ int main(int argc, char **argv){
 int max_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov){
 
 	if(depth == 0){
-		return evaluate2(s,2) - evaluate2(s,1);
+		return evaluate2(s,2);
 	}
 	if(is_terminal(s,x,y,player) == 1){
-		return evaluate2(s,2) - evaluate(s,1);
+		return evaluate2(s,2);
 
 	}
 	int score = INT_MIN;
@@ -279,22 +310,22 @@ int max_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov
 		s->count--;
 		a = MAX(a,score);
 		if(a >= b){
-			//	free(moves);		
+			free(moves);		
 			return a;
 		}
 
 	}
-	//free(moves);
+	free(moves);
 	return score;
 }
 
 int min_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov){
 
 	if (depth == 0){
-		return evaluate2(s,2) - evaluate(s,1);
+		return evaluate2(s,2) ;
 	}
 	if(is_terminal(s,x,y,player) == 1){
-		return evaluate2(s,2) - evaluate(s,1);
+		return evaluate2(s,2);
 
 	}
 	int score = INT_MAX;
@@ -324,12 +355,12 @@ int min_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov
 		s->count--;
 		b = MIN(b,score);
 		if(a >= b){
-//			free(moves);
+			free(moves);
 			return b;
 		}
 
 	}
-//	free(moves);
+	free(moves);
 	return score;
 }
 
@@ -614,7 +645,7 @@ int evaluate2(State *s, char player){
 				m++;
 			}
 
-			t_score += assign_score(player,p1_count,p2_count,free_count);
+			score += assign_score(player,p1_count,p2_count,free_count);
 
 
 
@@ -629,29 +660,36 @@ int assign_score(int player, int p1_count, int p2_count, int free_count){
 	if(player == 1){
 		if(p1_count == 5){
 			score += 2000;
+			return score;
+		}
+		if(p1_count == 4 && free_count == 1){
+			return 1000;
 		}
 		if(p1_count + free_count == 5){
-			score += p1_count*20 + free_count*5;
+			score += p1_count*2 + free_count;
 		}
 		if(p1_count  == 1 && p2_count == 4){
 			score += 1000;
 		}
-		if(p2_count > 3){
-			score += 500;
+		if(p1_count == 2 && p2_count == 3){
+			score += 700;
 		}
 	}
 	else{
 		if(p2_count == 5){
 			score += 2000;
 		}
+		if(p2_count == 4 && free_count == 1){
+			return 1000;
+		}
 		if(p2_count + free_count == 5){
-			score += p2_count*20 + free_count*5;
+			score += p2_count*2 + free_count;
 		}
 		if(p2_count == 1 && p1_count == 4){
 			score += 1000;
 		}
-		if(p1_count > 3){
-			score += 500;
+		if(p1_count == 2 && p2_count == 3){
+			score += 700;
 		}
 	}
 
@@ -659,6 +697,9 @@ int assign_score(int player, int p1_count, int p2_count, int free_count){
 
 
 }
+
+
+
 int evaluate(State *s , char player){
 
 	int i,j;
@@ -1179,7 +1220,7 @@ int generate_moves2(State *s, short *moves, int x, int y, int player){
 	}*/
 
 
-	int depth = 0;
+	int depth = 1;
 	while(depth < 5){
 		 i = x + depth;
 		 j = y;

@@ -8,6 +8,7 @@
 #define MAX(a,b) ((a) > (b) ? a : b)
 #define MIN(a,b) ((a) < (b) ? a : b)
 #define DEPTH 4
+#define NO_ITERATION 20
 // 1 - black
 // 2 -white
 typedef struct{
@@ -160,14 +161,18 @@ void play(){
 	struct timeval tz;
 	struct timezone tx;
 	printf("\nRow and column range from 0 to 18\n" );
+	int no_itr = 0;
+	double total = 0;
 	srandom(0);
-	while(1){
-		printf("\n Human player, enter row and column :");
-		scanf("%d %d",&i,&j);
+	while(no_itr < NO_ITERATION){
+		no_itr++;
+		i = random()%DIM;
+		j = random()%DIM;
 		while( i >= DIM || j >= DIM || s.board[i][j] != 0){
-	
-			printf("\nInvalid move, please enter again");
-			scanf("%d %d",&i,&j);
+		
+			i = random()%DIM;
+			j = random()%DIM;
+
 		}
 		s.board[i][j] = player;
 		s.count++;
@@ -180,6 +185,7 @@ void play(){
 		score = max_val(&s,DEPTH,INT_MIN,INT_MAX,i,j,player,&mov);
 		gettimeofday(&tz,&tx);
 		end_time = (double)tz.tv_sec;
+		total += (end_time - start_time);
 		printf("\nTime taken : %lf", end_time - start_time);
 		s.board[mov/100][mov%100] = aiplayer;
 		s.count++;
@@ -190,6 +196,8 @@ void play(){
 				break;
 		}
 	}
+
+	printf("\nAverage time %lf",total/no_itr);
 
 }
 int traverse_alphabeta(State *s){

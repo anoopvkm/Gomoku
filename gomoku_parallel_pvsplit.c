@@ -7,63 +7,354 @@
 #define WIN_VAL 400000
 #define MAX(a,b) ((a) > (b) ? a : b)
 #define MIN(a,b) ((a) < (b) ? a : b)
-#define DEPTH 4
+#define DEPTH 5
+
+
+#define COUNT_POS DIM*DIM
+#define MOV_POS COUNT_POS+1
+#define A_POS COUNT_POS+2
+#define B_POS COUNT_POS+3
+#define PLAY_POS COUNT_POS+4
+#define MOV_BUF_LEN DIM*DIM + 5
+#define DATA_BUF_LEN 3
+#define MASTER 0
+
+#define TERM_MSG 1
+#define WORK_MSG 2
+#define SCORE_MSG 3
+#define WORK_REQ 4
 // 1 - black
 // 2 -white
 typedef struct{
-	char **board;
+	char board[DIM][DIM];
 	int count;
 } State;
 
-// Intializes a board
 void create_board(State *s);
 
-// Generates all possible moves and stores them in *moves
 void generate_moves(State *s, short *moves );
 
-// Geneates limited moves and returns the number of moves
 int  generate_moves2(State *s, short *moves, int x, int y, int player );
 
-// Formatted printing of the board
 void print_board(State *s);
-
-// Assigns a sccore to board position
 int assign_score(int player, int p1_count, int p2_count, int free_count);
-
-// evaluates a board position , 2 types of evaluation function
-// evaluate2 used
+	
 int evaluate(State *s, char player);
 int evaluate2(State *s, char player);
 
 
-// A human vs AI player loop
+
 void play();
 
-
-// Checks for terminal condition
 int is_terminal(State *s,int x, int y, char player);
 
-// alpha beta max value function
 int max_val(State *s,int depth, int a, int b,int x, int y, char player,short *mov);
 
-// alpha beta min value function
+int PVSplit(State *s,int depth, int a, int b,int x, int y, char player,short *mov);
+
+
 int min_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov);
 
 
 int main(int argc, char **argv){
-	play();
+
+	MPI_Status status;
+	MPI_Init(NULL,NULL);
+	
+	int world_rank;
+
+	MPI_Comm_rank(MPI_COMM_WORLD,&world_rank);
+	
+	int world_size;
+
+	MPI_Comm_size(MPI_COMM_WORLD,&world_size);
+
+
+	int i, j,x,y;
+	State s;
+	char player = 1;
+	char aiplayer = 2;
+	char curplayer = 2;
+	char otherplayer = 1;
+	short mov;
+	int score;
+	int t_score;
+	short t_move;
+	int k,m;
+	int proc;
+	int len;
+	int a;
+	int b;
+	int sc_counter;
+	int send_counter;
+	int found_score;
+	int count;
+	int temp;
+
+	double start_time, end_time;
+	struct timeval tz;
+	struct timezone tx;
+
+	// count + a + b + x + y + player
+	short * move_buffer = (short*)malloc(MOV_BUF_LEN*sizeof(short));
+
+
+	// move, score
+	short * data_buffer = (short*)malloc(DATA_BUF_LEN*sizeof(short));
+	short *moves = (short*)malloc((DIM*DIM)*sizeof(short));
+
+
+	for( i = 0; i < MOV_BUF_LEN; i++){
+		move_buffer[i] = 0;
+	}
+
+
+	
+	for(i = 0; i < DIM; i++){
+		for(j = 0; j < DIM ; j++){
+			s.board[i][j] = 0;
+		}
+	}
+	s.count = 0;
+
+	if(world_rank == 0){
+
+
+
+
+
+		while(1){
+			printf("\nEnter row and col : ");
+			fflush(stdout);
+			scanf("%d %d",&x,&y);
+			while(x>= DIM || y >=DIM || s.board[x][y] != 0){
+				printf("\nAlready Occupied , please renter : ");
+				fflush(stdout);
+				scanf("%d %d",&x,&y);
+			}
+			s.board[x][y] = player;
+			move_buffer[x*DIM+y] = player;
+			s.count++;
+			if(is_terminal(&s,x,y,player) == 1){
+				printf("\nHuman Won");
+			    fflush(stdout);
+				for(i = 0; i < DIM; i++){
+					MPI_Send(move_buffer,MOV_BUF_LEN,MPI_SHORT,i,TERM_MSG,MPI_COMM_WORLD);
+	
+				}
+				break;
+			}
+
+			otherplayer = 1;
+			if(player == 1){
+				otherplayer = 2;
+			}
+			gettimeofday(&tz,&tx);
+			start_time  = (double)tz.tv_sec;
+			len = generate_moves2(&s,moves,x,y,player);
+			
+			a = SHRT_MIN;
+			b = SHRT_MAX;
+			sc_counter = 0 ;
+			send_counter = 0;
+			found_score = 0;
+			score = INT_MIN;
+			mov = moves[0];
+			// Initial PV split step to get bounds	
+			send_counter++;
+			s.board[mov/100][mov%100] = otherplayer;
+			s.count++;
+			score = PVSplit(&s,DEPTH-1,a,b,mov/100,mov%100,otherplayer,&t_move);
+			sc_counter++;
+			s.count--;
+			s.board[mov/100][mov%100] = 0;
+			if(score > b){
+				found_score = 1;
+			}
+			if(score > a){
+				a = score;
+			}
+			
+			while(send_counter < len || (found_score == 0 &&  sc_counter < len)){
+				// TODO get a score 
+				// Get move
+				// t_score = temp score
+				// t_move = temp move
+				// sc_counter incerement
+				// send a and b too
+			
+				MPI_Recv(data_buffer,DATA_BUF_LEN,MPI_SHORT,MPI_ANY_SOURCE,MPI_ANY_TAG,MPI_COMM_WORLD,&status);
+				
+				if(status.MPI_TAG == SCORE_MSG){
+					sc_counter++;
+					t_score = data_buffer[0];
+					t_move = data_buffer[1];
+					if(t_score > score ){
+
+						score = t_score;
+						mov = t_move;
+					}
+					a = MAX(a,score);
+					if(a >= b){
+						found_score = 1;
+						break;
+					}
+				}
+				else if(status.MPI_TAG == WORK_REQ && send_counter < len ){
+					proc = status.MPI_SOURCE;					
+					move_buffer[COUNT_POS] = s.count;
+					move_buffer[MOV_POS] = moves[send_counter];
+					move_buffer[A_POS] = a;
+					move_buffer[B_POS] = b;
+					move_buffer[PLAY_POS] = player;
+					MPI_Send(move_buffer,MOV_BUF_LEN,MPI_SHORT,proc,WORK_MSG,MPI_COMM_WORLD);
+					send_counter++;
+				}
+			}
+			gettimeofday(&tz,&tx);
+			end_time = (double)tz.tv_sec;
+			printf("\nTime : %lf",end_time - start_time);
+				
+
+			s.board[mov/100][mov%100] = aiplayer;
+			s.count++;
+			move_buffer[((mov/100)*DIM) + mov%100] = aiplayer;
+			print_board(&s);
+			if(is_terminal(&s,x,y,aiplayer) == 1){
+				printf("\nComputer Won");
+			    fflush(stdout);
+				for(i = 0; i < DIM; i++){
+					MPI_Send(move_buffer,MOV_BUF_LEN,MPI_SHORT,i,TERM_MSG,MPI_COMM_WORLD);
+	
+				}
+			
+				
+				
+				break;
+			}
+
+
+		}
+		
+
+	}
+	else{
+		// Generate board, incemente count, add element, player
+		while(1){
+			MPI_Send(data_buffer,DATA_BUF_LEN,MPI_SHORT,MASTER,WORK_REQ,MPI_COMM_WORLD);
+			MPI_Recv(move_buffer,MOV_BUF_LEN,MPI_SHORT,MASTER,MPI_ANY_TAG,MPI_COMM_WORLD,&status);
+			
+			if(status.MPI_TAG == WORK_MSG){
+				a = move_buffer[A_POS];
+				b = move_buffer[B_POS];
+			    mov = move_buffer[MOV_POS];
+				curplayer = move_buffer[PLAY_POS];
+				count = move_buffer[COUNT_POS];
+				s.count = count;
+				i = 0;
+				for(k = 0; k < DIM ; k ++){
+					for(m = 0; m < DIM; m++)
+						s.board[k][m] = move_buffer[i++];
+				}
+		
+				otherplayer = 1;
+				if(curplayer == 1){
+					otherplayer = 2;
+				}
+				s.board[mov/100][mov%100] = otherplayer;
+				s.count++;
+				score = min_val(&s,DEPTH-1,a,b,mov/100,mov%100,otherplayer,&t_move);
+				s.count--;
+				s.board[mov/100][mov%100] = 0;
+				data_buffer[1] = mov;
+				data_buffer[0] = score;
+				MPI_Send(data_buffer,DATA_BUF_LEN,MPI_SHORT,MASTER,SCORE_MSG,MPI_COMM_WORLD);
+		
+
+			}
+			else if(status.MPI_TAG == TERM_MSG){
+				break;
+			}
+		}
+
+	}
+	MPI_Finalize();
 	
 }
 
 
-// Maximises AI player node's value
+int PVSplit(State *s,int depth, int a, int b,int x, int y,char player,short *mov){
+
+	if(depth == 0){
+		return evaluate2(s,2) - evaluate2(s,1);
+	}
+	if(is_terminal(s,x,y,player) == 1){
+		return evaluate2(s,2) - evaluate(s,1);
+
+	}
+	int score = INT_MIN;
+	short *moves;
+	moves = (short*)malloc((DIM*DIM - s->count)*sizeof(short));
+
+
+	int len = generate_moves2(s,moves,x,y,player);
+	int i;
+	short move;
+	char otherplayer = 1;
+	int temp;
+	short tmove;
+	if(player == 1){
+		otherplayer = 2;
+	}
+	move = moves[0];
+	s->board[move/100][move%100] = otherplayer;
+	s->count++;
+	
+	score = PVSplit(s,depth-1,a,b,move/100,move%100,otherplayer,&tmove);
+	*mov = move;
+	s->count--;
+	s->board[move/100][move%100] = 0;
+	
+	if(score > b){
+		free(moves);
+		return b;
+	}
+	if(score > a){
+		a = score;
+	}
+	for(i = 1; i < len; i++){
+		move = moves[i];
+		s->board[move/100][move%100] = otherplayer;
+		s->count++;
+		temp = score;
+		score = MAX(score,min_val(s,depth-1,a,b,move/100,move%100,otherplayer,&tmove));
+		s->board[move/100][move%100] = 0;
+		s->count--;
+		if(temp != score){
+			*mov = move;
+		}
+		a = MAX(a,score);
+		if(a >= b){
+			free(moves);		
+			return a;
+		}
+
+
+
+
+	}
+	free(moves);
+	return score;
+}
+
+
 int max_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov){
 
 	if(depth == 0){
-		return evaluate2(s,2);
+		return evaluate2(s,2) - evaluate2(s,1);
 	}
 	if(is_terminal(s,x,y,player) == 1){
-		return evaluate2(s,2) ;
+		return evaluate2(s,2) - evaluate(s,1);
 
 	}
 	int score = INT_MIN;
@@ -93,20 +384,19 @@ int max_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov
 		s->count--;
 		a = MAX(a,score);
 		if(a >= b){
-			free(moves);		
+			//	free(moves);		
 			return a;
 		}
 
 	}
-	free(moves);
+	//free(moves);
 	return score;
 }
 
-// Minimizes human player heuristic value
 int min_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov){
 
 	if (depth == 0){
-		return evaluate2(s,2);
+		return evaluate2(s,2) - evaluate(s,1);
 	}
 	if(is_terminal(s,x,y,player) == 1){
 		return evaluate2(s,2);
@@ -139,15 +429,15 @@ int min_val(State *s,int depth, int a, int b,int x, int y,char player,short *mov
 		s->count--;
 		b = MIN(b,score);
 		if(a >= b){
-			free(moves);
+//			free(moves);
 			return b;
 		}
 
 	}
-	free(moves);
+//	free(moves);
 	return score;
 }
-// Play loop
+
 void play(){
 	State s;
 	create_board(&s);
@@ -156,39 +446,25 @@ void play(){
 	char aiplayer = 2;
 	int score;
 	short mov;
-	double start_time, end_time;
-	struct timeval tz;
-	struct timezone tx;
-	printf("\nRow and column range from 0 to 18\n" );
-	srandom(0);
 	while(1){
-		printf("\n Human player, enter row and column :");
+		printf("Enter row and col");
 		scanf("%d %d",&i,&j);
-		while( i >= DIM || j >= DIM || s.board[i][j] != 0){
-	
-			printf("\nInvalid move, please enter again");
-			scanf("%d %d",&i,&j);
-		}
 		s.board[i][j] = player;
 		s.count++;
 		if(is_terminal(&s,i,j,player) == 1){
-			printf("\nHuman Won!!!!!!!!\n");
+			printf("\nHuman Won");
 			break;
 		}
-		gettimeofday(&tz,&tx);
-		start_time = (double)tz.tv_sec;
 		score = max_val(&s,DEPTH,INT_MIN,INT_MAX,i,j,player,&mov);
-		gettimeofday(&tz,&tx);
-		end_time = (double)tz.tv_sec;
-		printf("\nTime taken : %lf", end_time - start_time);
+		printf("\n Move : %d %d",mov/100,mov%100);
 		s.board[mov/100][mov%100] = aiplayer;
 		s.count++;
-		print_board(&s);
-	
 		if(is_terminal(&s,mov/100,mov%100,aiplayer) == 1){
-			printf("\nComputer Won!!!!!!!!!\n");
+			printf("\nComputer Won");
 				break;
 		}
+		print_board(&s);
+		printf("Score : %d",score);
 	}
 
 }
@@ -343,10 +619,6 @@ int is_terminal(State *s, int i, int j, char player){
 
 
 }
-
-// Evaluation function
-// Counts the filled positions along diagonals and vertical and horizontal
-// and passes them to assign score function to obtain a value
 int evaluate2(State *s, char player){
 	int i, j ;
 	int free_count, p1_count, p2_count;
@@ -458,7 +730,6 @@ int evaluate2(State *s, char player){
 	
 }
 
-// Assigns score
 int assign_score(int player, int p1_count, int p2_count, int free_count){
 	int score = 0;
 	if(player == 1){
@@ -502,7 +773,8 @@ int assign_score(int player, int p1_count, int p2_count, int free_count){
 
 }
 
-// Unused evalautation function
+
+
 int evaluate(State *s , char player){
 
 	int i,j;
@@ -916,11 +1188,13 @@ int evaluate(State *s , char player){
 }
 void create_board(State *s){
 
-	s->board = (char**)malloc(DIM*sizeof(char*));
+//	s->board = (char**)malloc(DIM*sizeof(char*));
+
+	
 	int i;
 	int j;
 	for(i = 0; i < DIM; i++){
-		s->board[i] = (char*)malloc(DIM*sizeof(char));
+	//	s->board[i] = (char*)malloc(DIM*sizeof(char));
 		for(j = 0; j < DIM ; j++){
 			s->board[i][j] = 0;
 		}
@@ -978,6 +1252,9 @@ void generate_moves(State *s, short *moves){
 			}
 		}
 	}
+	for( i = 0; i < DIM*DIM - s->count; i++){
+//		printf("\n%d %d",i,moves[i]);
+	}
 
 
 }
@@ -994,8 +1271,31 @@ int generate_moves2(State *s, short *moves, int x, int y, int player){
 	int len = 0;
 	int pos_front = 0;
 	int pos_back = DIM*DIM - s->count -1;
-	int depth = 1;
-	// Generates nodes at 5 distance from current point
+	/*for (i = 0 ; i < DIM; i++){
+		if(abs(i-x) > 5){
+			break;
+		}
+		for(j = 0; j < DIM; j++){
+			if( abs(y-j) > 5){
+				break;
+			}
+			if(s->board[i][j] == 0){
+				if(i > 0 && i < DIM - 1 && j > 0 && j <DIM -1 
+						&& (s->board[i+1][j] != 0 || s->board[i][j+1] != 0 
+							|| s->board[i-1][j] != 0 || s->board[i][j-1] != 0
+							|| s->board[i-1][j-1] != 0 || s->board[i+1][j+1] != 0
+							|| s->board[i-1][j+1] != 0 || s->board[i+1][j-1] != 0))
+					moves[pos_front++] = 100*i+j;		
+				else
+					moves[pos_front++] = 100*i+j;
+				len++;
+			}
+		}
+		
+	}*/
+
+
+	int depth = 0;
 	while(depth < 5){
 		 i = x + depth;
 		 j = y;
@@ -1047,7 +1347,6 @@ int generate_moves2(State *s, short *moves, int x, int y, int player){
 		 depth++;
 	}
 
-	// If no free space, searching the entire tree
 	if(pos_front == 0){
 		for (i = 0 ; i < DIM; i++){
 		if(abs(i-x) > 5){
